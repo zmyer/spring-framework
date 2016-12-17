@@ -28,6 +28,7 @@ import org.springframework.core.MethodParameter;
 import org.springframework.core.ResolvableType;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -120,6 +121,10 @@ public class HttpEntityMethodProcessor extends AbstractMessageConverterMethodPro
 
 		ServletServerHttpRequest inputMessage = createInputMessage(webRequest);
 		Type paramType = getHttpEntityType(parameter);
+		if (paramType == null) {
+			throw new IllegalArgumentException("HttpEntity parameter '" + parameter.getParameterName() +
+					"' in method " + parameter.getMethod() + " is not parameterized");
+		}
 
 		Object body = readWithMessageConverters(webRequest, parameter, paramType);
 		if (RequestEntity.class == parameter.getParameterType()) {
@@ -145,8 +150,9 @@ public class HttpEntityMethodProcessor extends AbstractMessageConverterMethodPro
 		else if (parameterType instanceof Class) {
 			return Object.class;
 		}
-		throw new IllegalArgumentException("HttpEntity parameter '" + parameter.getParameterName() +
-				"' in method " + parameter.getMethod() + " is not parameterized");
+		else {
+			return null;
+		}
 	}
 
 	@Override
@@ -183,7 +189,7 @@ public class HttpEntityMethodProcessor extends AbstractMessageConverterMethodPro
 		if (responseEntity instanceof ResponseEntity) {
 			int returnStatus = ((ResponseEntity<?>) responseEntity).getStatusCodeValue();
 			outputMessage.getServletResponse().setStatus(returnStatus);
-			if(returnStatus == 200) {
+			if (returnStatus == 200) {
 				if (isResourceNotModified(inputMessage, outputMessage)) {
 					// Ensure headers are flushed, no body should be written.
 					outputMessage.flush();
@@ -227,8 +233,10 @@ public class HttpEntityMethodProcessor extends AbstractMessageConverterMethodPro
 		HttpHeaders responseHeaders = outputMessage.getHeaders();
 		String etag = responseHeaders.getETag();
 		long lastModifiedTimestamp = responseHeaders.getLastModified();
-		responseHeaders.remove(HttpHeaders.ETAG);
-		responseHeaders.remove(HttpHeaders.LAST_MODIFIED);
+		if (inputMessage.getMethod() == HttpMethod.GET || inputMessage.getMethod() == HttpMethod.HEAD) {
+			responseHeaders.remove(HttpHeaders.ETAG);
+			responseHeaders.remove(HttpHeaders.LAST_MODIFIED);
+		}
 
 		return servletWebRequest.checkNotModified(etag, lastModifiedTimestamp);
 	}
@@ -240,6 +248,7 @@ public class HttpEntityMethodProcessor extends AbstractMessageConverterMethodPro
 		}
 		else {
 			Type type = getHttpEntityType(returnType);
+			type = (type != null ? type : Object.class);
 			return ResolvableType.forMethodParameter(returnType, type).resolve(Object.class);
 		}
 	}

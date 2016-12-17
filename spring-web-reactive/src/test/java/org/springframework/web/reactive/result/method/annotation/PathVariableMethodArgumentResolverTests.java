@@ -24,19 +24,19 @@ import java.util.Optional;
 import org.junit.Before;
 import org.junit.Test;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import org.springframework.core.MethodParameter;
 import org.springframework.core.annotation.SynthesizingMethodParameter;
-import org.springframework.core.convert.ConversionService;
-import org.springframework.core.convert.support.DefaultConversionService;
+import org.springframework.format.support.DefaultFormattingConversionService;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.mock.http.server.reactive.test.MockServerHttpRequest;
 import org.springframework.mock.http.server.reactive.test.MockServerHttpResponse;
-import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.tests.TestSubscriber;
-import org.springframework.ui.ModelMap;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.support.ConfigurableWebBindingInitializer;
+import org.springframework.web.reactive.BindingContext;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.server.ServerErrorException;
 import org.springframework.web.server.ServerWebExchange;
@@ -44,9 +44,7 @@ import org.springframework.web.server.adapter.DefaultServerWebExchange;
 import org.springframework.web.server.session.MockWebSessionManager;
 import org.springframework.web.server.session.WebSessionManager;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 /**
  * Unit tests for {@link PathVariableMethodArgumentResolver}.
@@ -71,8 +69,7 @@ public class PathVariableMethodArgumentResolverTests {
 
 	@Before
 	public void setUp() throws Exception {
-		ConversionService conversionService = new DefaultConversionService();
-		this.resolver = new PathVariableMethodArgumentResolver(conversionService, null);
+		this.resolver = new PathVariableMethodArgumentResolver(null);
 
 		ServerHttpRequest request = new MockServerHttpRequest(HttpMethod.GET, "/");
 		WebSessionManager sessionManager = new MockWebSessionManager();
@@ -98,7 +95,8 @@ public class PathVariableMethodArgumentResolverTests {
 		uriTemplateVars.put("name", "value");
 		this.exchange.getAttributes().put(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE, uriTemplateVars);
 
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramNamedString, new ModelMap(), this.exchange);
+		BindingContext bindingContext = new BindingContext();
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramNamedString, bindingContext, this.exchange);
 		Object result = mono.block();
 		assertEquals("value", result);
 	}
@@ -109,7 +107,8 @@ public class PathVariableMethodArgumentResolverTests {
 		uriTemplateVars.put("name", "value");
 		this.exchange.getAttributes().put(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE, uriTemplateVars);
 
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramNotRequired, new ModelMap(), this.exchange);
+		BindingContext bindingContext = new BindingContext();
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramNotRequired, bindingContext, this.exchange);
 		Object result = mono.block();
 		assertEquals("value", result);
 	}
@@ -120,41 +119,53 @@ public class PathVariableMethodArgumentResolverTests {
 		uriTemplateVars.put("name", "value");
 		this.exchange.getAttributes().put(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE, uriTemplateVars);
 
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramOptional, new ModelMap(), this.exchange);
+		ConfigurableWebBindingInitializer initializer = new ConfigurableWebBindingInitializer();
+		initializer.setConversionService(new DefaultFormattingConversionService());
+		BindingContext bindingContext = new BindingContext(initializer);
+
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramOptional, bindingContext, this.exchange);
 		Object result = mono.block();
 		assertEquals(Optional.of("value"), result);
 	}
 
 	@Test
 	public void handleMissingValue() throws Exception {
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramNamedString, new ModelMap(), this.exchange);
-		TestSubscriber
-				.subscribe(mono)
-				.assertError(ServerErrorException.class);
+		BindingContext bindingContext = new BindingContext();
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramNamedString, bindingContext, this.exchange);
+		StepVerifier.create(mono)
+				.expectNextCount(0)
+				.expectError(ServerErrorException.class)
+				.verify();
 	}
 
 	@Test
 	public void nullIfNotRequired() throws Exception {
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramNotRequired, new ModelMap(), this.exchange);
-		TestSubscriber
-				.subscribe(mono)
-				.assertComplete()
-				.assertNoValues();
+		BindingContext bindingContext = new BindingContext();
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramNotRequired, bindingContext, this.exchange);
+		StepVerifier.create(mono)
+				.expectNextCount(0)
+				.expectComplete()
+				.verify();
 	}
 
 	@Test
 	public void wrapEmptyWithOptional() throws Exception {
-		Mono<Object> mono = this.resolver.resolveArgument(this.paramOptional, new ModelMap(), this.exchange);
-		Object result = mono.block();
-		TestSubscriber
-				.subscribe(mono)
-				.assertValues(Optional.empty());
+		BindingContext bindingContext = new BindingContext();
+		Mono<Object> mono = this.resolver.resolveArgument(this.paramOptional, bindingContext, this.exchange);
+
+		StepVerifier.create(mono)
+				.consumeNextWith(value -> {
+					assertTrue(value instanceof Optional);
+					assertFalse(((Optional) value).isPresent());
+				})
+				.expectComplete()
+				.verify();
 	}
 
 
 	@SuppressWarnings("unused")
 	public void handle(@PathVariable(value = "name") String param1, String param2,
-			@PathVariable(name="name", required = false) String param3,
+			@PathVariable(name = "name", required = false) String param3,
 			@PathVariable("name") Optional<String> param4) {
 	}
 

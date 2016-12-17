@@ -35,12 +35,15 @@ import org.springframework.util.MultiValueMap;
 /**
  * Mock implementation of {@link ServerHttpRequest}.
  * @author Rossen Stoyanchev
+ * @since 5.0
  */
 public class MockServerHttpRequest implements ServerHttpRequest {
 
 	private HttpMethod httpMethod;
 
 	private URI url;
+
+	private String contextPath = "";
 
 	private final MultiValueMap<String, String> queryParams = new LinkedMultiValueMap<>();
 
@@ -97,6 +100,15 @@ public class MockServerHttpRequest implements ServerHttpRequest {
 	@Override
 	public URI getURI() {
 		return this.url;
+	}
+
+	public void setContextPath(String contextPath) {
+		this.contextPath = contextPath;
+	}
+
+	@Override
+	public String getContextPath() {
+		return this.contextPath;
 	}
 
 	public MockServerHttpRequest addHeader(String name, String value) {

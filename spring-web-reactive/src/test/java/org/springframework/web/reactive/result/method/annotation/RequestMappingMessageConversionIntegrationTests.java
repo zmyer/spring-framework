@@ -19,12 +19,14 @@ package org.springframework.web.reactive.result.method.annotation;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import io.reactivex.Flowable;
+import io.reactivex.Maybe;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
@@ -44,6 +46,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -54,13 +57,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.reactive.config.WebReactiveConfiguration;
+import org.springframework.web.reactive.config.EnableWebReactive;
 
 import static java.util.Arrays.asList;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.springframework.http.MediaType.APPLICATION_XML;
-
 
 /**
  * {@code @RequestMapping} integration tests focusing on serialization and
@@ -95,25 +97,26 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 	@Test
 	public void byteBufferResponseBodyWithFlux() throws Exception {
 		String expected = "Hello!";
-		assertEquals(expected, performGet("/raw-response/flux", null, String.class).getBody());
+		assertEquals(expected, performGet("/raw-response/flux", new HttpHeaders(), String.class).getBody());
 	}
 
 	@Test
 	public void byteBufferResponseBodyWithObservable() throws Exception {
 		String expected = "Hello!";
-		assertEquals(expected, performGet("/raw-response/observable", null, String.class).getBody());
+		assertEquals(expected, performGet("/raw-response/observable", new HttpHeaders(), String.class).getBody());
 	}
 
 	@Test
 	public void byteBufferResponseBodyWithRxJava2Observable() throws Exception {
 		String expected = "Hello!";
-		assertEquals(expected, performGet("/raw-response/rxjava2-observable", null, String.class).getBody());
+		assertEquals(expected, performGet("/raw-response/rxjava2-observable",
+				new HttpHeaders(), String.class).getBody());
 	}
 
 	@Test
 	public void byteBufferResponseBodyWithFlowable() throws Exception {
 		String expected = "Hello!";
-		assertEquals(expected, performGet("/raw-response/flowable", null, String.class).getBody());
+		assertEquals(expected, performGet("/raw-response/flowable", new HttpHeaders(), String.class).getBody());
 	}
 
 	@Test
@@ -172,7 +175,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 
 	@Test
 	public void resource() throws Exception {
-		ResponseEntity<byte[]> response = performGet("/resource", null, byte[].class);
+		ResponseEntity<byte[]> response = performGet("/resource", new HttpHeaders(), byte[].class);
 
 		assertEquals(HttpStatus.OK, response.getStatusCode());
 		assertTrue(response.hasBody());
@@ -213,6 +216,13 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 	public void personTransformWithRxJava2Single() throws Exception {
 		assertEquals(new Person("ROBERT"),
 				performPost("/person-transform/rxjava2-single", JSON, new Person("Robert"),
+						JSON, Person.class).getBody());
+	}
+
+	@Test
+	public void personTransformWithRxJava2Maybe() throws Exception {
+		assertEquals(new Person("ROBERT"),
+				performPost("/person-transform/rxjava2-maybe", JSON, new Person("Robert"),
 						JSON, Person.class).getBody());
 	}
 
@@ -370,9 +380,10 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 
 
 	@Configuration
+	@EnableWebReactive
 	@ComponentScan(resourcePattern = "**/RequestMappingMessageConversionIntegrationTests$*.class")
 	@SuppressWarnings({"unused", "WeakerAccess"})
-	static class WebConfig extends WebReactiveConfiguration {
+	static class WebConfig {
 	}
 
 
@@ -386,7 +397,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 			DataBufferFactory dataBufferFactory = new DefaultDataBufferFactory();
 			Jackson2JsonEncoder encoder = new Jackson2JsonEncoder();
 			return encoder.encode(Mono.just(new Person("Robert")), dataBufferFactory,
-					ResolvableType.forClass(Person.class), JSON).map(DataBuffer::asByteBuffer);
+					ResolvableType.forClass(Person.class), JSON, Collections.emptyMap()).map(DataBuffer::asByteBuffer);
 		}
 
 		@GetMapping("/flux")
@@ -409,6 +420,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 			return Flowable.just(ByteBuffer.wrap("Hello!".getBytes()));
 		}
 	}
+
 
 	@RestController
 	@RequestMapping("/person-response")
@@ -462,6 +474,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 		}
 	}
 
+
 	@RestController
 	@SuppressWarnings("unused")
 	private static class ResourceController {
@@ -471,6 +484,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 			return new ClassPathResource("spring.png", ZeroCopyIntegrationTests.class);
 		}
 	}
+
 
 	@RestController
 	@RequestMapping("/person-transform")
@@ -503,6 +517,11 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 			return personFuture.map(person -> new Person(person.getName().toUpperCase()));
 		}
 
+		@PostMapping("/rxjava2-maybe")
+		public Maybe<Person> transformRxJava2Maybe(@RequestBody Maybe<Person> personFuture) {
+			return personFuture.map(person -> new Person(person.getName().toUpperCase()));
+		}
+
 		@PostMapping("/publisher")
 		public Publisher<Person> transformPublisher(@RequestBody Publisher<Person> persons) {
 			return Flux
@@ -530,6 +549,7 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 			return persons.map(person -> new Person(person.getName().toUpperCase()));
 		}
 	}
+
 
 	@RestController
 	@RequestMapping("/person-create")
@@ -569,17 +589,19 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 		}
 
 		@PostMapping("/rxjava2-observable")
-		public io.reactivex.Observable<Void> createWithRxJava2Observable(@RequestBody io.reactivex.Observable<Person> observable) {
-			return observable.toList().doOnNext(persons::addAll).flatMap(document -> io.reactivex.Observable.empty());
+		public io.reactivex.Completable createWithRxJava2Observable(@RequestBody io.reactivex.Observable<Person> observable) {
+			return observable.toList().doOnSuccess(persons::addAll).toCompletable();
 		}
 
 		@PostMapping("/flowable")
-		public Flowable<Void> createWithFlowable(@RequestBody Flowable<Person> flowable) {
-			return flowable.toList().doOnNext(persons::addAll).flatMap(document -> Flowable.empty());
+		public io.reactivex.Completable createWithFlowable(@RequestBody Flowable<Person> flowable) {
+			return flowable.toList().doOnSuccess(persons::addAll).toCompletable();
 		}
 	}
 
-	@XmlRootElement @SuppressWarnings("WeakerAccess")
+
+	@XmlRootElement
+	@SuppressWarnings("WeakerAccess")
 	private static class Person {
 
 		private String name;
@@ -625,7 +647,9 @@ public class RequestMappingMessageConversionIntegrationTests extends AbstractReq
 		}
 	}
 
-	@XmlRootElement @SuppressWarnings({"WeakerAccess", "unused"})
+
+	@XmlRootElement
+	@SuppressWarnings({"WeakerAccess", "unused"})
 	private static class People {
 
 		private List<Person> persons = new ArrayList<>();

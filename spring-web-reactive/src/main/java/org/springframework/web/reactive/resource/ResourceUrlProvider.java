@@ -25,6 +25,8 @@ import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
@@ -35,7 +37,7 @@ import org.springframework.util.AntPathMatcher;
 import org.springframework.util.PathMatcher;
 import org.springframework.web.reactive.handler.SimpleUrlHandlerMapping;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.util.HttpRequestPathHelper;
+import org.springframework.web.server.support.HttpRequestPathHelper;
 
 /**
  * A central component to use to obtain the public URL path that clients should
@@ -167,17 +169,16 @@ public class ResourceUrlProvider implements ApplicationListener<ContextRefreshed
 	 * @param requestUrl the request URL path to resolve
 	 * @return the resolved public URL path, or {@code null} if unresolved
 	 */
-	public final String getForRequestUrl(ServerWebExchange exchange, String requestUrl) {
+	public final Mono<String> getForRequestUrl(ServerWebExchange exchange, String requestUrl) {
 		if (logger.isTraceEnabled()) {
 			logger.trace("Getting resource URL for request URL \"" + requestUrl + "\"");
 		}
 		int prefixIndex = getLookupPathIndex(exchange);
-		int suffixIndex = getQueryParamsIndex(requestUrl);
+		int suffixIndex = getEndPathIndex(requestUrl);
 		String prefix = requestUrl.substring(0, prefixIndex);
 		String suffix = requestUrl.substring(suffixIndex);
 		String lookupPath = requestUrl.substring(prefixIndex, suffixIndex);
-		String resolvedLookupPath = getForLookupPath(lookupPath);
-		return (resolvedLookupPath != null ? prefix + resolvedLookupPath + suffix : null);
+		return getForLookupPath(lookupPath).map(resolvedPath -> prefix + resolvedPath + suffix);
 	}
 
 	private int getLookupPathIndex(ServerWebExchange exchange) {
@@ -187,9 +188,17 @@ public class ResourceUrlProvider implements ApplicationListener<ContextRefreshed
 		return requestPath.indexOf(lookupPath);
 	}
 
-	private int getQueryParamsIndex(String lookupPath) {
-		int index = lookupPath.indexOf("?");
-		return index > 0 ? index : lookupPath.length();
+	private int getEndPathIndex(String lookupPath) {
+		int suffixIndex = lookupPath.length();
+		int queryIndex = lookupPath.indexOf("?");
+		if(queryIndex > 0) {
+			suffixIndex = queryIndex;
+		}
+		int hashIndex = lookupPath.indexOf("#");
+		if(hashIndex > 0) {
+			suffixIndex = Math.min(suffixIndex, hashIndex);
+		}
+		return suffixIndex;
 	}
 
 	/**
@@ -204,7 +213,7 @@ public class ResourceUrlProvider implements ApplicationListener<ContextRefreshed
 	 * @param lookupPath the lookup path to check
 	 * @return the resolved public URL path, or {@code null} if unresolved
 	 */
-	public final String getForLookupPath(String lookupPath) {
+	public final Mono<String> getForLookupPath(String lookupPath) {
 		if (logger.isTraceEnabled()) {
 			logger.trace("Getting resource URL for lookup path \"" + lookupPath + "\"");
 		}
@@ -216,32 +225,31 @@ public class ResourceUrlProvider implements ApplicationListener<ContextRefreshed
 			}
 		}
 
-		if (!matchingPatterns.isEmpty()) {
-			Comparator<String> patternComparator = getPathMatcher().getPatternComparator(lookupPath);
-			Collections.sort(matchingPatterns, patternComparator);
-			for (String pattern : matchingPatterns) {
-				String pathWithinMapping = getPathMatcher().extractPathWithinPattern(pattern, lookupPath);
-				String pathMapping = lookupPath.substring(0, lookupPath.indexOf(pathWithinMapping));
-				if (logger.isTraceEnabled()) {
-					logger.trace("Invoking ResourceResolverChain for URL pattern \"" + pattern + "\"");
-				}
-				ResourceWebHandler handler = this.handlerMap.get(pattern);
-				ResourceResolverChain chain = new DefaultResourceResolverChain(handler.getResourceResolvers());
-				String resolved = chain.resolveUrlPath(pathWithinMapping, handler.getLocations());
-				if (resolved == null) {
-					continue;
-				}
-				if (logger.isTraceEnabled()) {
-					logger.trace("Resolved public resource URL path \"" + resolved + "\"");
-				}
-				return pathMapping + resolved;
-			}
+		if (matchingPatterns.isEmpty()) {
+			return Mono.empty();
 		}
 
-		if (logger.isDebugEnabled()) {
-			logger.debug("No matching resource mapping for lookup path \"" + lookupPath + "\"");
-		}
-		return null;
+		Comparator<String> patternComparator = getPathMatcher().getPatternComparator(lookupPath);
+		Collections.sort(matchingPatterns, patternComparator);
+
+		return Flux.fromIterable(matchingPatterns)
+				.concatMap(pattern -> {
+					String pathWithinMapping = getPathMatcher().extractPathWithinPattern(pattern, lookupPath);
+					String pathMapping = lookupPath.substring(0, lookupPath.indexOf(pathWithinMapping));
+					if (logger.isTraceEnabled()) {
+						logger.trace("Invoking ResourceResolverChain for URL pattern \"" + pattern + "\"");
+					}
+					ResourceWebHandler handler = this.handlerMap.get(pattern);
+					ResourceResolverChain chain = new DefaultResourceResolverChain(handler.getResourceResolvers());
+					return chain.resolveUrlPath(pathWithinMapping, handler.getLocations())
+							.map(resolvedPath -> {
+								if (logger.isTraceEnabled()) {
+									logger.trace("Resolved public resource URL path \"" + resolvedPath + "\"");
+								}
+								return pathMapping + resolvedPath;
+							});
+				})
+				.next();
 	}
 
 }

@@ -24,6 +24,7 @@ import java.util.List;
 import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Test;
+import reactor.core.publisher.Mono;
 
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
@@ -60,38 +61,57 @@ public class AppCacheManifestTransformerTests {
 
 	@Before
 	public void setup() {
-		this.transformer = new AppCacheManifestTransformer();
-		this.chain = mock(ResourceTransformerChain.class);
+		ClassPathResource allowedLocation = new ClassPathResource("test/", getClass());
+		ResourceWebHandler resourceHandler = new ResourceWebHandler();
+		ResourceUrlProvider resourceUrlProvider = new ResourceUrlProvider();
+		resourceUrlProvider.setHandlerMap(Collections.singletonMap("/static/**", resourceHandler));
 
-		MockServerHttpRequest request = new MockServerHttpRequest(HttpMethod.GET, "");
-		ServerHttpResponse response = new MockServerHttpResponse();
-		WebSessionManager manager = new DefaultWebSessionManager();
-		this.exchange = new DefaultServerWebExchange(request, response, manager);
+		VersionResourceResolver versionResolver = new VersionResourceResolver();
+		versionResolver.setStrategyMap(Collections.singletonMap("/**", new ContentVersionStrategy()));
+		PathResourceResolver pathResolver = new PathResourceResolver();
+		pathResolver.setAllowedLocations(allowedLocation);
+		List<ResourceResolver> resolvers = Arrays.asList(versionResolver, pathResolver);
+		ResourceResolverChain resolverChain = new DefaultResourceResolverChain(resolvers);
+
+		CssLinkResourceTransformer cssLinkResourceTransformer = new CssLinkResourceTransformer();
+		cssLinkResourceTransformer.setResourceUrlProvider(resourceUrlProvider);
+		List<ResourceTransformer> transformers = Arrays.asList(cssLinkResourceTransformer);
+		this.chain = new DefaultResourceTransformerChain(resolverChain, transformers);
+		this.transformer = new AppCacheManifestTransformer();
+		this.transformer.setResourceUrlProvider(resourceUrlProvider);
+
+		resourceHandler.setResourceResolvers(resolvers);
+		resourceHandler.setResourceTransformers(transformers);
+		resourceHandler.setLocations(Collections.singletonList(allowedLocation));
 	}
 
 
 	@Test
 	public void noTransformIfExtensionNoMatch() throws Exception {
+		initExchange(HttpMethod.GET, "/static/foobar.file");
+		this.chain = mock(ResourceTransformerChain.class);
 		Resource resource = mock(Resource.class);
 		given(resource.getFilename()).willReturn("foobar.file");
-		given(this.chain.transform(this.exchange, resource)).willReturn(resource);
+		given(this.chain.transform(this.exchange, resource)).willReturn(Mono.just(resource));
 
-		Resource result = this.transformer.transform(this.exchange, resource, this.chain);
+		Resource result = this.transformer.transform(this.exchange, resource, this.chain).blockMillis(5000);
 		assertEquals(resource, result);
 	}
 
 	@Test
 	public void syntaxErrorInManifest() throws Exception {
+		initExchange(HttpMethod.GET, "/static/error.appcache");
+		this.chain = mock(ResourceTransformerChain.class);
 		Resource resource = new ClassPathResource("test/error.appcache", getClass());
-		given(this.chain.transform(this.exchange, resource)).willReturn(resource);
+		given(this.chain.transform(this.exchange, resource)).willReturn(Mono.just(resource));
 
-		Resource result = this.transformer.transform(this.exchange, resource, this.chain);
+		Resource result = this.transformer.transform(this.exchange, resource, this.chain).blockMillis(5000);
 		assertEquals(resource, result);
 	}
 
 	@Test
 	public void transformManifest() throws Exception {
-
+		initExchange(HttpMethod.GET, "/static/test.appcache");
 		VersionResourceResolver versionResolver = new VersionResourceResolver();
 		versionResolver.setStrategyMap(Collections.singletonMap("/**", new ContentVersionStrategy()));
 
@@ -106,16 +126,16 @@ public class AppCacheManifestTransformerTests {
 		this.chain = new DefaultResourceTransformerChain(resolverChain, transformers);
 
 		Resource resource = new ClassPathResource("test/test.appcache", getClass());
-		Resource result = this.transformer.transform(this.exchange, resource, this.chain);
+		Resource result = this.transformer.transform(this.exchange, resource, this.chain).blockMillis(5000);
 		byte[] bytes = FileCopyUtils.copyToByteArray(result.getInputStream());
 		String content = new String(bytes, "UTF-8");
 
 		assertThat("should rewrite resource links", content,
-				Matchers.containsString("foo-e36d2e05253c6c7085a91522ce43a0b4.css"));
+				Matchers.containsString("/static/foo-e36d2e05253c6c7085a91522ce43a0b4.css"));
 		assertThat("should rewrite resource links", content,
-				Matchers.containsString("bar-11e16cf79faee7ac698c805cf28248d2.css"));
+				Matchers.containsString("/static/bar-11e16cf79faee7ac698c805cf28248d2.css"));
 		assertThat("should rewrite resource links", content,
-				Matchers.containsString("js/bar-bd508c62235b832d960298ca6c0b7645.js"));
+				Matchers.containsString("/static/js/bar-bd508c62235b832d960298ca6c0b7645.js"));
 
 		assertThat("should not rewrite external resources", content,
 				Matchers.containsString("//example.org/style.css"));
@@ -126,4 +146,10 @@ public class AppCacheManifestTransformerTests {
 				Matchers.containsString("# Hash: 4bf0338bcbeb0a5b3a4ec9ed8864107d"));
 	}
 
+	private void initExchange(HttpMethod method, String url) {
+		MockServerHttpRequest request = new MockServerHttpRequest(method, url);
+		ServerHttpResponse response = new MockServerHttpResponse();
+		WebSessionManager manager = new DefaultWebSessionManager();
+		this.exchange = new DefaultServerWebExchange(request, response, manager);
+	}
 }

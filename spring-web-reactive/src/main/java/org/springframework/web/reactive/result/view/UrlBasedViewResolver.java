@@ -17,6 +17,7 @@
 package org.springframework.web.reactive.result.view;
 
 import java.util.Locale;
+import java.util.function.Function;
 
 import reactor.core.publisher.Mono;
 
@@ -52,9 +53,19 @@ import org.springframework.util.PatternMatchUtils;
  * <p>Note: This class does not support localized resolution, i.e. resolving
  * a symbolic view name to different resources depending on the current locale.
  * @author Rossen Stoyanchev
+ * @author Sebastien Deleuze
  * @since 5.0
  */
 public class UrlBasedViewResolver extends ViewResolverSupport implements ViewResolver, InitializingBean {
+
+	/**
+	 * Prefix for special view names that specify a redirect URL (usually
+	 * to a controller after a form has been submitted and processed).
+	 * Such view names will not be resolved in the configured default
+	 * way but rather be treated as special shortcut.
+	 */
+	public static final String REDIRECT_URL_PREFIX = "redirect:";
+
 
 	private Class<?> viewClass;
 
@@ -63,6 +74,10 @@ public class UrlBasedViewResolver extends ViewResolverSupport implements ViewRes
 	private String suffix = "";
 
 	private String[] viewNames;
+
+	private Function<String, RedirectView> redirectViewProvider = url -> new RedirectView(url);
+
+	private String requestContextAttribute;
 
 
 	/**
@@ -141,6 +156,30 @@ public class UrlBasedViewResolver extends ViewResolverSupport implements ViewRes
 		return this.viewNames;
 	}
 
+	/**
+	 * URL based {@link RedirectView} provider which can be used to provide, for example,
+	 * redirect views with a custom default status code.
+	 */
+	public void setRedirectViewProvider(Function<String, RedirectView> redirectViewProvider) {
+		this.redirectViewProvider = redirectViewProvider;
+	}
+
+	/**
+	 * Set the name of the RequestContext attribute for all views.
+	 * @param requestContextAttribute name of the RequestContext attribute
+	 * @see AbstractView#setRequestContextAttribute
+	 */
+	public void setRequestContextAttribute(String requestContextAttribute) {
+		this.requestContextAttribute = requestContextAttribute;
+	}
+
+	/**
+	 * Return the name of the RequestContext attribute for all views, if any.
+	 */
+	protected String getRequestContextAttribute() {
+		return this.requestContextAttribute;
+	}
+
 
 	@Override
 	public void afterPropertiesSet() throws Exception {
@@ -155,7 +194,14 @@ public class UrlBasedViewResolver extends ViewResolverSupport implements ViewRes
 		if (!canHandle(viewName, locale)) {
 			return Mono.empty();
 		}
-		AbstractUrlBasedView urlBasedView = createUrlBasedView(viewName);
+		AbstractUrlBasedView urlBasedView;
+		if (viewName.startsWith(REDIRECT_URL_PREFIX)) {
+			String redirectUrl = viewName.substring(REDIRECT_URL_PREFIX.length());
+			urlBasedView = this.redirectViewProvider.apply(redirectUrl);
+		}
+		else {
+			urlBasedView = createUrlBasedView(viewName);
+		}
 		View view = applyLifecycleMethods(viewName, urlBasedView);
 		try {
 			return (urlBasedView.checkResourceExists(locale) ? Mono.just(view) : Mono.empty());
@@ -195,6 +241,7 @@ public class UrlBasedViewResolver extends ViewResolverSupport implements ViewRes
 	protected AbstractUrlBasedView createUrlBasedView(String viewName) {
 		AbstractUrlBasedView view = (AbstractUrlBasedView) BeanUtils.instantiateClass(getViewClass());
 		view.setSupportedMediaTypes(getSupportedMediaTypes());
+		view.setRequestContextAttribute(getRequestContextAttribute());
 		view.setDefaultCharset(getDefaultCharset());
 		view.setUrl(getPrefix() + viewName + getSuffix());
 		return view;

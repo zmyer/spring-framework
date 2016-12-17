@@ -16,6 +16,9 @@
 
 package org.springframework.mock.http.server.reactive.test;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.reactivestreams.Publisher;
@@ -24,9 +27,12 @@ import reactor.core.publisher.Mono;
 
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.core.io.buffer.support.DataBufferTestUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.util.LinkedMultiValueMap;
@@ -35,6 +41,7 @@ import org.springframework.util.MultiValueMap;
 /**
  * Mock implementation of {@link ServerHttpResponse}.
  * @author Rossen Stoyanchev
+ * @since 5.0
  */
 public class MockServerHttpResponse implements ServerHttpResponse {
 
@@ -44,9 +51,11 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 
 	private final MultiValueMap<String, ResponseCookie> cookies = new LinkedMultiValueMap<>();
 
-	private Publisher<DataBuffer> body;
+	private Function<String, String> urlEncoder = url -> url;
 
-	private Publisher<Publisher<DataBuffer>> bodyWithFlushes;
+	private Flux<DataBuffer> body;
+
+	private Flux<Publisher<DataBuffer>> bodyWithFlushes;
 
 	private DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
 
@@ -57,6 +66,7 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 		return true;
 	}
 
+	@Override
 	public HttpStatus getStatusCode() {
 		return this.status;
 	}
@@ -71,6 +81,16 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 		return this.cookies;
 	}
 
+	@Override
+	public String encodeUrl(String url) {
+		return (this.urlEncoder != null ? this.urlEncoder.apply(url) : url);
+	}
+
+	@Override
+	public void registerUrlEncoder(Function<String, String> encoder) {
+		this.urlEncoder = (this.urlEncoder != null ? this.urlEncoder.andThen(encoder) : encoder);
+	}
+
 	public Publisher<DataBuffer> getBody() {
 		return this.body;
 	}
@@ -80,15 +100,15 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 	}
 
 	@Override
-	public Mono<Void> writeWith(Publisher<DataBuffer> body) {
-		this.body = body;
-		return Flux.from(this.body).then();
+	public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
+		this.body = Flux.from(body);
+		return this.body.then();
 	}
 
 	@Override
-	public Mono<Void> writeAndFlushWith(Publisher<Publisher<DataBuffer>> body) {
-		this.bodyWithFlushes = body;
-		return Flux.from(this.bodyWithFlushes).then();
+	public Mono<Void> writeAndFlushWith(Publisher<? extends Publisher<? extends DataBuffer>> body) {
+		this.bodyWithFlushes = Flux.from(body).map(Flux::from);
+		return this.bodyWithFlushes.then();
 	}
 
 	@Override
@@ -103,6 +123,31 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 	@Override
 	public DataBufferFactory bufferFactory() {
 		return this.bufferFactory;
+	}
+
+	/**
+	 * Return the body of the response aggregated and converted to a String
+	 * using the charset of the Content-Type response or otherwise defaulting
+	 * to "UTF-8".
+	 */
+	public Mono<String> getBodyAsString() {
+		Charset charset = getCharset();
+		return Flux.from(getBody())
+				.reduce(bufferFactory().allocateBuffer(), (previous, current) -> {
+					previous.write(current);
+					DataBufferUtils.release(current);
+					return previous;
+				})
+				.map(buffer -> DataBufferTestUtils.dumpString(buffer, charset));
+	}
+
+	private Charset getCharset() {
+		Charset charset = null;
+		MediaType contentType = getHeaders().getContentType();
+		if (contentType != null) {
+			charset = contentType.getCharset();
+		}
+		return (charset != null ? charset : StandardCharsets.UTF_8);
 	}
 
 }

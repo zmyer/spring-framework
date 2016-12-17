@@ -16,6 +16,7 @@
 
 package org.springframework.web.reactive.result.view;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -163,7 +164,8 @@ public class HttpMessageWriterView implements View {
 		Publisher<? extends T> stream = Mono.just((T) value);
 		ResolvableType type = ResolvableType.forClass(value.getClass());
 		ServerHttpResponse response = exchange.getResponse();
-		return ((HttpMessageWriter<T>) getMessageWriter()).write(stream, type, contentType, response);
+		return ((HttpMessageWriter<T>) getMessageWriter()).write(stream, type, contentType,
+				response, Collections.emptyMap());
 	}
 
 }

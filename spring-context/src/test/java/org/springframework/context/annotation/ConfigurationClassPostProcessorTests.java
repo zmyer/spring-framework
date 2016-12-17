@@ -20,6 +20,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.List;
 import javax.annotation.PostConstruct;
 
 import org.junit.Before;
@@ -609,6 +610,21 @@ public class ConfigurationClassPostProcessorTests {
 		ctx.getBean("aFoo");
 	}
 
+	@Test
+	public void testInjectionPointMatchForNarrowTargetReturnType() {
+		ApplicationContext ctx = new AnnotationConfigApplicationContext(FooBarConfiguration.class);
+		assertSame(ctx.getBean(BarImpl.class), ctx.getBean(FooImpl.class).bar);
+	}
+
+	@Test
+	public void testCollectionInjectionFromSameConfigurationClass() {
+		ApplicationContext ctx = new AnnotationConfigApplicationContext(CollectionInjectionConfiguration.class);
+		CollectionInjectionConfiguration bean = ctx.getBean(CollectionInjectionConfiguration.class);
+		assertNotNull(bean.testBeans);
+		assertEquals(1, bean.testBeans.size());
+		assertSame(ctx.getBean(TestBean.class), bean.testBeans.get(0));
+	}
+
 
 	// -------------------------------------------------------------------------
 
@@ -1115,7 +1131,7 @@ public class ConfigurationClassPostProcessorTests {
 	@Configuration
 	public static class A {
 
-		@Autowired(required=true)
+		@Autowired(required = true)
 		Z z;
 
 		@Bean
@@ -1219,6 +1235,44 @@ public class ConfigurationClassPostProcessorTests {
 	static abstract class FooFactory {
 
 		abstract DependingFoo createFoo(BarArgument bar);
+	}
+
+	interface BarInterface {
+	}
+
+	static class BarImpl implements BarInterface {
+	}
+
+	static class FooImpl {
+
+		@Autowired
+		public BarImpl bar;
+	}
+
+	@Configuration
+	static class FooBarConfiguration {
+
+		@Bean @DependsOn("bar")
+		public FooImpl foo() {
+			return new FooImpl();
+		}
+
+		@Bean
+		public BarInterface bar() {
+			return new BarImpl();
+		}
+	}
+
+	@Configuration
+	static class CollectionInjectionConfiguration {
+
+		@Autowired(required = false)
+		public List<TestBean> testBeans;
+
+		@Bean
+		public TestBean thing() {
+			return new TestBean();
+		}
 	}
 
 }

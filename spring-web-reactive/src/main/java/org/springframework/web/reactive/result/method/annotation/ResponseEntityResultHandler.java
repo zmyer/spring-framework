@@ -90,11 +90,8 @@ public class ResponseEntityResultHandler extends AbstractMessageWriterResultHand
 			return true;
 		}
 		else {
-			ReactiveAdapter adapter = getAdapterRegistry().getAdapterFrom(returnType, result.getReturnValue());
-			if (adapter != null &&
-					!adapter.getDescriptor().isMultiValue() &&
-					!adapter.getDescriptor().isNoValue()) {
-
+			ReactiveAdapter adapter = getAdapterRegistry().getAdapter(returnType, result.getReturnValue());
+			if (adapter != null && !adapter.isMultiValue() && !adapter.isNoValue()) {
 				ResolvableType genericType = result.getReturnType().getGeneric(0);
 				return isSupportedType(genericType.getRawClass());
 			}
@@ -117,10 +114,11 @@ public class ResponseEntityResultHandler extends AbstractMessageWriterResultHand
 		Optional<Object> optionalValue = result.getReturnValue();
 
 		Class<?> rawClass = returnType.getRawClass();
-		ReactiveAdapter adapter = getAdapterRegistry().getAdapterFrom(rawClass, optionalValue);
+		ReactiveAdapter adapter = getAdapterRegistry().getAdapter(rawClass, optionalValue);
 
 		if (adapter != null) {
-			returnValueMono = adapter.toMono(optionalValue);
+			Assert.isTrue(!adapter.isMultiValue(), "Only a single ResponseEntity supported.");
+			returnValueMono = Mono.from(adapter.toPublisher(optionalValue));
 			bodyType = new MethodParameter(result.getReturnTypeSource());
 			bodyType.increaseNestingLevel();
 			bodyType.increaseNestingLevel();

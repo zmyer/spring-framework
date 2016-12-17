@@ -175,6 +175,14 @@ public class ResolvableTypeTests {
 		ResolvableType type = ResolvableType.forField(field);
 		assertThat(type.getType(), equalTo(field.getGenericType()));
 		assertThat(type.resolve(), equalTo((Class) List.class));
+
+		Field field2 = Fields.class.getDeclaredField("otherPrivateField");
+		ResolvableType type2 = ResolvableType.forField(field2);
+		assertThat(type2.getType(), equalTo(field2.getGenericType()));
+		assertThat(type2.resolve(), equalTo((Class) List.class));
+
+		assertEquals(type, type2);
+		assertEquals(type.hashCode(), type2.hashCode());
 	}
 
 	@Test
@@ -847,7 +855,7 @@ public class ResolvableTypeTests {
 		VariableResolver variableResolver = mock(VariableResolver.class);
 		given(variableResolver.getSource()).willReturn(this);
 		ResolvableType longType = ResolvableType.forClass(Long.class);
-		given(variableResolver.resolveVariable((TypeVariable<?>) anyObject())).willReturn(longType);
+		given(variableResolver.resolveVariable(any())).willReturn(longType);
 
 		ResolvableType variable = ResolvableType.forType(
 				Fields.class.getField("typeVariableType").getGenericType(), variableResolver);
@@ -1383,6 +1391,9 @@ public class ResolvableTypeTests {
 
 		@SuppressWarnings("unused")
 		private List<String> privateField;
+
+		@SuppressWarnings("unused")
+		private List<String> otherPrivateField;
 
 		public Map<Map<String, Integer>, Map<Byte, Long>> nested;
 

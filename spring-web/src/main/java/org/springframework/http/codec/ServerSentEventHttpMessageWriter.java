@@ -17,8 +17,11 @@
 package org.springframework.http.codec;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.reactivestreams.Publisher;
@@ -46,10 +49,18 @@ import org.springframework.util.MimeTypeUtils;
  */
 public class ServerSentEventHttpMessageWriter implements HttpMessageWriter<Object> {
 
-	private static final MediaType TEXT_EVENT_STREAM =
-			new MediaType("text", "event-stream");
+	/**
+	 * Server-Sent Events hint expecting a {@link Boolean} value which when set to true
+	 * will adapt the content in order to comply with Server-Sent Events recommendation.
+	 * For example, it will append "data:" after each line break with data encoders
+	 * supporting it.
+	 * @see <a href="https://www.w3.org/TR/eventsource/">Server-Sent Events W3C recommendation</a>
+	 */
+	public static final String SSE_CONTENT_HINT = ServerSentEventHttpMessageWriter.class.getName() + ".sseContent";
+
 
 	private final List<Encoder<?>> dataEncoders;
+
 
 	public ServerSentEventHttpMessageWriter() {
 		this.dataEncoders = Collections.emptyList();
@@ -57,34 +68,38 @@ public class ServerSentEventHttpMessageWriter implements HttpMessageWriter<Objec
 
 	public ServerSentEventHttpMessageWriter(List<Encoder<?>> dataEncoders) {
 		Assert.notNull(dataEncoders, "'dataEncoders' must not be null");
-		this.dataEncoders = dataEncoders;
+		this.dataEncoders = new ArrayList<>(dataEncoders);
 	}
 
+
 	@Override
-	public boolean canWrite(ResolvableType type, MediaType mediaType) {
-		return mediaType == null || TEXT_EVENT_STREAM.isCompatibleWith(mediaType);
+	public boolean canWrite(ResolvableType elementType, MediaType mediaType) {
+		return mediaType == null || MediaType.TEXT_EVENT_STREAM.isCompatibleWith(mediaType) ||
+				ServerSentEvent.class.isAssignableFrom(elementType.getRawClass());
 	}
 
 	@Override
 	public List<MediaType> getWritableMediaTypes() {
-		return Collections.singletonList(TEXT_EVENT_STREAM);
+		return Collections.singletonList(MediaType.TEXT_EVENT_STREAM);
 	}
 
 	@Override
-	public Mono<Void> write(Publisher<?> inputStream, ResolvableType type,
-							MediaType contentType, ReactiveHttpOutputMessage outputMessage) {
+	public Mono<Void> write(Publisher<?> inputStream, ResolvableType elementType, MediaType mediaType,
+			ReactiveHttpOutputMessage outputMessage, Map<String, Object> hints) {
 
-		outputMessage.getHeaders().setContentType(TEXT_EVENT_STREAM);
+		outputMessage.getHeaders().setContentType(MediaType.TEXT_EVENT_STREAM);
 
 		DataBufferFactory bufferFactory = outputMessage.bufferFactory();
-		Flux<Publisher<DataBuffer>> body = encode(inputStream, bufferFactory, type);
+		Flux<Publisher<DataBuffer>> body = encode(inputStream, bufferFactory, elementType, hints);
 
 		return outputMessage.writeAndFlushWith(body);
 	}
 
-	private Flux<Publisher<DataBuffer>> encode(Publisher<?> inputStream,
-											   DataBufferFactory bufferFactory, ResolvableType type) {
+	private Flux<Publisher<DataBuffer>> encode(Publisher<?> inputStream, DataBufferFactory bufferFactory,
+			ResolvableType type, Map<String, Object> hints) {
 
+		Map<String, Object> hintsWithSse = new HashMap<>(hints);
+		hintsWithSse.put(SSE_CONTENT_HINT, true);
 		return Flux.from(inputStream)
 				.map(o -> toSseEvent(o, type))
 				.map(sse -> {
@@ -105,7 +120,7 @@ public class ServerSentEventHttpMessageWriter implements HttpMessageWriter<Objec
 									return Flux.empty();
 								}
 								else {
-									return applyEncoder(data, bufferFactory);
+									return applyEncoder(data, bufferFactory, hintsWithSse);
 								}
 							}).orElse(Flux.empty());
 
@@ -129,14 +144,14 @@ public class ServerSentEventHttpMessageWriter implements HttpMessageWriter<Objec
 	}
 
 	@SuppressWarnings("unchecked")
-	private <T> Flux<DataBuffer> applyEncoder(Object data, DataBufferFactory bufferFactory) {
+	private <T> Flux<DataBuffer> applyEncoder(Object data, DataBufferFactory bufferFactory, Map<String, Object> hints) {
 		ResolvableType elementType = ResolvableType.forClass(data.getClass());
 		Optional<Encoder<?>> encoder = dataEncoders
 				.stream()
 				.filter(e -> e.canEncode(elementType, MimeTypeUtils.APPLICATION_JSON))
 				.findFirst();
 		return ((Encoder<T>) encoder.orElseThrow(() -> new CodecException("No suitable encoder found!")))
-				.encode(Mono.just((T) data), bufferFactory, elementType, MimeTypeUtils.APPLICATION_JSON)
+				.encode(Mono.just((T) data), bufferFactory, elementType, MimeTypeUtils.APPLICATION_JSON, hints)
 				.concatWith(encodeString("\n", bufferFactory));
 	}
 
